@@ -51,10 +51,15 @@ PORT = 3000
 
 Start the FastAPI server:
 
-```cmd
+```python
 python app.py
+
+# Upload UI: http://0.0.0.0:3000/upload
+# Webcam UI: http://0.0.0.0:3000/webcam
+# Swagger UI: http://0.0.0.0:3000/docs
 ```
 The server will run on http://0.0.0.0:3000 by default.
+
 
 ## API Endpoints
 ### Upload and Detect Faces from Image
