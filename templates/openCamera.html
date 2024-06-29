@@ -3,31 +3,41 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Camera Access</title>
+    <title>Real-time Face Detection</title>
     <style>
         body {
             font-family: Arial, sans-serif;
             margin: 0;
-            padding: 0;
+            padding: 20px;
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            height: 100vh;
-            background-color: #ffffff;
+            min-height: 100vh;
+            background-color: #f0f0f0;
         }
         h1 {
             margin-bottom: 20px;
             color: #333;
         }
-        #video {
+        #videoContainer {
+            position: relative;
             width: 80%;
-            max-width: 600px;
+            max-width: 640px;
+            margin-bottom: 20px;
+        }
+        #video, #canvas {
+            width: 100%;
             height: auto;
             border-radius: 10px;
             box-shadow: 0 0 10px rgba(0, 0, 0, 0.2);
         }
-        #startButton {
+        #canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+        button {
             padding: 10px 20px;
             font-size: 16px;
             background-color: #007bff;
@@ -36,35 +46,166 @@
             border-radius: 5px;
             cursor: pointer;
             transition: background-color 0.3s ease;
+            margin: 5px;
         }
-        #startButton:hover {
+        button:hover {
             background-color: #0056b3;
         }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        #error, #info {
+            margin-top: 10px;
+            text-align: center;
+        }
+        #error { color: red; }
+        #info { color: green; }
     </style>
 </head>
 <body>
-    <h1>Web Camera Access</h1>
-    <video id="video" autoplay></video>
-    <button id="startButton">Start Camera</button>
+    <h1>Real-time Face Detection</h1>
+    <div id="videoContainer">
+        <video id="video" autoplay playsinline></video>
+        <canvas id="canvas"></canvas>
+    </div>
+    <div>
+        <button id="startButton">Start Camera</button>
+        <button id="stopButton" disabled>Stop Camera</button>
+    </div>
+    <div id="error"></div>
+    <div id="info"></div>
     
     <script>
         const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
         const startButton = document.getElementById('startButton');
-        
-        startButton.addEventListener('click', function () {
-            if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-                navigator.mediaDevices.getUserMedia({ video: true })
-                .then(function(stream) {
-                    console.log(stream)
-                    video.srcObject = stream;
-                })
-                .catch(function(error) {
-                    console.error('Error accessing the camera:', error);
+        const stopButton = document.getElementById('stopButton');
+        const errorDiv = document.getElementById('error');
+        const infoDiv = document.getElementById('info');
+        let stream;
+        let intervalId;
+
+        startButton.addEventListener('click', startCamera);
+        stopButton.addEventListener('click', stopCamera);
+
+        async function startCamera() {
+            try {
+
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const videoDevices = devices.filter(device => device.kind === 'videoinput');
+               
+                if (videoDevices.length === 0) {
+                    throw new Error('No video devices found');
+                }
+
+                const constraints = {
+                    video: {
+                        deviceId: videoDevices[0].deviceId
+                    }
+                };
+                
+                stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                if (stream) {
+                    stream.getTracks().forEach(track => track.stop());
+                }
+                
+                stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { 
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    } 
                 });
-            } else {
-                alert('getUserMedia is not supported in this browser.');
+                video.srcObject = stream;
+                video.onloadedmetadata = function(e) {
+                    video.play();
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    startFaceDetection();
+                };
+                startButton.disabled = true;
+                stopButton.disabled = false;
+                errorDiv.textContent = '';
+                infoDiv.textContent = 'Camera started. Detecting faces...';
+            } catch (error) {
+                console.error('Error accessing the camera:', error);
+                let errorMessage = 'An unknown error occurred.';
+                if (error.name === 'NotAllowedError') {
+                    errorMessage = 'Camera access was denied. Please allow camera access and try again.';
+                } else if (error.name === 'NotFoundError') {
+                    errorMessage = 'No camera was found on your device.';
+                } else if (error.name === 'NotReadableError') {
+                    errorMessage = 'Could not access your camera. It may be in use by another application.';
+                }
+                errorDiv.textContent = `Error accessing the camera: ${errorMessage}`;
             }
-        });
+        }
+
+        function stopCamera() {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                video.srcObject = null;
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                startButton.disabled = false;
+                stopButton.disabled = true;
+                clearInterval(intervalId);
+                infoDiv.textContent = 'Camera stopped.';
+            }
+        }
+
+        async function startFaceDetection() {
+            intervalId = setInterval(async () => {
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                const imageData = canvas.toDataURL('image/jpeg');
+                
+                try {
+                    const response = await fetch('http://localhost:3000/upload/img/', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ image: imageData.split(',')[1] })
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+
+                    const result = await response.json();
+                    if (result.detected_faces && result.detected_faces.length > 0) {
+                        drawFaces(result.detected_faces);
+                        infoDiv.textContent = `Detected ${result.detected_faces.length} face(s)`;
+                    } else {
+                        ctx.clearRect(0, 0, canvas.width, canvas.height);
+                        infoDiv.textContent = 'No faces detected';
+                    }
+                } catch (error) {
+                    console.error('Error detecting faces:', error);
+                    errorDiv.textContent = `Error detecting faces: ${error.message}`;
+                }
+            }, 1000); // Detect faces every 1 second
+        }
+
+        function drawFaces(faces) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = 'red';
+
+            faces.forEach(face => {
+                const { top_left_x, top_left_y, bottom_right_x, bottom_right_y } = face.bounding_box;
+                const width = bottom_right_x - top_left_x;
+                const height = bottom_right_y - top_left_y;
+
+                ctx.beginPath();
+                ctx.rect(top_left_x, top_left_y, width, height);
+                ctx.stroke();
+
+                ctx.fillStyle = 'red';
+                ctx.font = '16px Arial';
+                ctx.fillText(`Confidence: ${face.confidence_score.toFixed(2)}`, top_left_x, top_left_y - 5);
+            });
+        }
     </script>
 </body>
 </html>

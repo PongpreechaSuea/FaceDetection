@@ -54,6 +54,14 @@
             border-radius: 5px;
             box-shadow: 0 0 10px rgba(0, 0, 0, 0.2);
         }
+        .loading {
+            display: none;
+            margin-top: 20px;
+        }
+        .error {
+            color: red;
+            margin-top: 10px;
+        }
     </style>
 </head>
 <body>
@@ -62,34 +70,60 @@
         <input type="file" id="fileInput" accept="image/*" />
         <button type="submit">Upload</button>
     </form>
+    <div id="loading" class="loading">Processing...</div>
+    <div id="error" class="error"></div>
     <div id="result"></div>
 
     <script>
         const form = document.getElementById('uploadForm');
         const fileInput = document.getElementById('fileInput');
         const resultDiv = document.getElementById('result');
+        const loadingDiv = document.getElementById('loading');
+        const errorDiv = document.getElementById('error');
 
         form.addEventListener('submit', async (event) => {
             event.preventDefault();
 
+            if (!fileInput.files.length) {
+                errorDiv.textContent = "Please select a file.";
+                return;
+            }
+
+            const file = fileInput.files[0];
+            if (!file.type.startsWith('image/')) {
+                errorDiv.textContent = "Please select an image file.";
+                return;
+            }
+
             const formData = new FormData();
-            formData.append('file', fileInput.files[0]);
+            formData.append('file', file);
+
+            errorDiv.textContent = '';
+            loadingDiv.style.display = 'block';
+            resultDiv.innerHTML = '';
 
             try {
-                const response = await fetch('http://localhost:8000/upload/img', {
+                const response = await fetch('http://localhost:3000/upload/img/', {
                     method: 'POST',
                     body: formData
                 });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
                 const data = await response.json();
 
                 if ('error' in data) {
-                    resultDiv.innerHTML = `<p>Error: ${data.error}</p>`;
-                } else {
-                    const imageUrl = `data:image/jpeg;base64,${data.image}`;
-                    resultDiv.innerHTML = `<h2>Detected Faces</h2><img src="${imageUrl}" alt="Detected Faces" />`;
+                    throw new Error(data.error);
                 }
+
+                const imageUrl = `data:image/jpeg;base64,${data.image}`;
+                resultDiv.innerHTML = `<h2>Detected Faces</h2><img src="${imageUrl}" alt="Detected Faces" />`;
             } catch (error) {
-                resultDiv.innerHTML = `<p>Error: ${error.message}</p>`;
+                errorDiv.textContent = `Error: ${error.message}`;
+            } finally {
+                loadingDiv.style.display = 'none';
             }
         });
     </script>

@@ -1,6 +1,6 @@
 # Face Detection API
 
-This project is a FastAPI-based web service for face detection using the YOLOv8 model.
+This project is a Flask-based web service for face detection using the YOLOv8 model.
 
 ## Features
 - Face detection from uploaded images
@@ -9,8 +9,8 @@ This project is a FastAPI-based web service for face detection using the YOLOv8 
 - Display detection results on images and video stream
 
 ## Requirements
-- Python 3.x
-- FastAPI
+- Python 3.9
+- Flask
 - OpenCV
 - ONNX Runtime
 - Pillow
@@ -36,9 +36,15 @@ Customize the `src/config.py` file as needed:
 ```python
 MODEL = "./model/yolov8n-face.onnx"
 IMAGE_PATH = "image_debug.jpg"
-
+IOU = 0.58
+REG_MAX = 16
+STRIDES = (8, 16, 32)
+CONF = 0.3
+IMGSIZE = 480
+FREE_SPACE = 20 
+HOST = "0.0.0.0"
+PORT = 3000
 ```
-
 
 ## Usage
 ### Starting the Server
@@ -46,41 +52,22 @@ IMAGE_PATH = "image_debug.jpg"
 Start the FastAPI server:
 
 ```cmd
-python app.py || uvicorn app:app --host 127.0.0.1 --port 8000
+python app.py
 ```
+The server will run on http://0.0.0.0:3000 by default.
 
 ## API Endpoints
-
 ### Upload and Detect Faces from Image
 
-- Endpoint: /upload/payload/
+- Endpoint: /upload
 - Method: POST
 - Description: Upload an image and detect faces
 - Request: multipart/form-data
+    
     - file: Image for face detection
-- Response:
-    ```jsonCopy
-    {
-        "name_file": "example",
-        "extension": "JPG",
-        "file_input": "example.jpg",
-        "type": "ImageFaceDetection",
-        "count_img": 2,
-        "data": [
-            {
-                "idx": 0,
-                "bbox": {"x1": 100, "y1": 200, "x2": 300, "y2": 400},
-                "conf": 0.95
-            },
-            {
-                "idx": 1,
-                "bbox": {"x1": 500, "y1": 600, "x2": 700, "y2": 800},
-                "conf": 0.88
-            }
-        ],
-        "image": "base64_encoded_image_string"
-    }
-    ```
+
+
+- Response: JSON with detection results and base64 encoded image
 
 ## Adjust Settings
 
@@ -88,18 +75,12 @@ python app.py || uvicorn app:app --host 127.0.0.1 --port 8000
 - Method: POST
 - Description: Adjust confidence threshold and input size
 - Request: Query parameters
+
     - conf_threshold: New confidence threshold value
     - input_size: New input size
-- Response:
-    ```jsonCopy
-    {
-        "status": 200,
-        "action": "seting",
-        "succeed": true,
-        "project": "faceDetection",
-        "model": "yolov8"
-    }
-    ```
+
+
+- Response: JSON with status of the operation
 
 ## Stream Video from Camera
 
@@ -112,3 +93,33 @@ python app.py || uvicorn app:app --host 127.0.0.1 --port 8000
 
 - /upload: Page for uploading images
 - /webcam: Page for opening camera and real-time face detection
+
+
+## Docker Support
+This project includes Docker support for easy deployment.
+
+## Building and Running with Docker
+
+Build the Docker image:
+```cmd
+docker build -t face-detection-app .
+```
+
+Run the container:
+```cmd
+docker run -p 3000:3000 face-detection-app
+```
+
+## Using Docker Compose
+Alternatively, you can use Docker Compose:
+``` bash
+docker-compose up --build
+```
+
+This will build the image and start the container, mapping port 3000 on your host to port 3000 in the container.
+
+## Example Output
+
+<p align="center">
+  <img src="./images/image1.png" alt="Project Logo" width="750"/>
+</p>

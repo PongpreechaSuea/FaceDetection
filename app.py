@@ -1,145 +1,123 @@
-from fastapi import FastAPI, File, UploadFile, Request
-from fastapi import HTTPException
-from fastapi.responses import JSONResponse
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, File, UploadFile, Request, HTTPException, Depends
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
-from src.detect_yolo import YOLOFaceImageDetector
-
+from src.detect import YOLOFaceImageDetector
+from src.camera_multi import Camera
+from src.config import *
 from PIL import Image
-import uvicorn
-
+import cv2
 import io
+import asyncio
 
-app = FastAPI()
-templates = Jinja2Templates(directory="templates")
-app.add_middleware(
-    CORSMiddleware,allow_origins=['*'],allow_credentials=True,allow_methods=['*'],allow_headers=['*'],
+app = FastAPI(
+    title="Face Detection API",
+    description="An advanced face detection system using YOLOv8",
+    version="1.0.0"
 )
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # ปรับตามความเหมาะสม
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+templates = Jinja2Templates(directory="templates")
 
 faceDetection = YOLOFaceImageDetector()
 faceDetection.seting()
 
-# ========================================================================= 
+async def verify_image(file: UploadFile = File(...)):
+    if not file.content_type.startswith('image/'):
+        raise HTTPException(status_code=400, detail="File uploaded is not an image.")
+    return file
 
-# def info():
-#     return {
-#         "status": 200,
-#         "action" : "default",
-#         "succeed" : True,
-#         "project" : "face_detection",
-#         "model" : "yolov8"
-#     }
-
-
-@app.get("/")
+@app.get("/", tags=["Info"])
 async def root():
     return {
         "status": 200,
-        "action" : "default",
-        "succeed" : True,
-        "project" : "face_detection",
-        "model" : "yolov8"
+        "message": "Welcome to the Face Detection API!",
+        "model": "YOLOv8",
+        "features": [
+            "Image upload detection",
+            "Real-time webcam detection",
+            "Adjustable confidence threshold",
+            "Customizable input size"
+        ]
     }
 
-@app.get("/detail")
+@app.get("/detail", tags=["Settings"])
 async def detail():
     return {
         "status": 200,
-        "action" : "detail",
-        "succeed" : True,
-        "conf_threshold" : faceDetection.conf_threshold,
-        "input_size" : faceDetection.input_size,
-        "model" : "yolov8"
+        "conf_threshold": faceDetection.conf_threshold,
+        "input_size": faceDetection.input_size,
+        "model": "YOLOv8"
     }
 
-
-@app.post("/seting")
-async def seting(conf_threshold: float = 0.5, input_size: int = 320):
-    try:
-        if conf_threshold > 1:
-            raise HTTPException(status_code=400, detail="conf_threshold must be less than or equal to 1")
-        
-        faceDetection.conf_threshold = conf_threshold
-        faceDetection.input_size = input_size
-        faceDetection.seting()
-        return {
-            "status": 200,
-            "action" : "seting",
-            "succeed" : True,
-            "action": "seting",
-            "project": "faceDetection",
-            "model": "yolov8"
-        }
-    except Exception as e:
-        return {
-            "status": int(str(e).split(":")[0]),
-            "action" : "seting",
-            "succeed" : False,
-            "error": str(e).split(":")[1],
-        }
-
-
-@app.post("/upload/img/")
-async def upload_image(file: UploadFile = File(...)):
-    contents = await file.read()
-    result = faceDetection.webcam_upload(contents)
-    return JSONResponse(content=result)
+@app.post("/seting", tags=["Settings"])
+async def seting(conf_threshold: float = 0.5, input_size: int = 480):
+    if conf_threshold > 1 or conf_threshold < 0:
+        raise HTTPException(status_code=400, detail="Confidence threshold must be between 0 and 1")
+    if input_size <= 0:
+        raise HTTPException(status_code=400, detail="Input size must be positive")
     
+    faceDetection.conf_threshold = conf_threshold
+    faceDetection.input_size = input_size
+    faceDetection.seting()
+    return {"status": 200, "message": "Settings updated successfully"}
 
-@app.post("/upload/payload/")
-async def upload_image_payload(file: UploadFile = File(...)):
+@app.post("/upload/img/", tags=["Detection"])
+async def upload_image(file: UploadFile = Depends(verify_image)):
     contents = await file.read()
-    result = faceDetection.run(contents, file.filename)
-    if "error" in result:
-        return JSONResponse(status_code=400, content=result)
-    else:
-        return JSONResponse(content=result)
+    result = await asyncio.to_thread(faceDetection.webcam_upload, contents)
+    return JSONResponse(content=result)
 
-@app.post("/upload/size")
-async def size_img(file: UploadFile = File(...)):
+@app.post("/upload/payload/", tags=["Detection"])
+async def upload_image_payload(file: UploadFile = Depends(verify_image)):
+    contents = await file.read()
+    result = await asyncio.to_thread(faceDetection.run, contents, file.filename)
+    return JSONResponse(content=result, status_code=400 if "error" in result else 200)
+
+@app.post("/upload/size", tags=["Utility"])
+async def size_img(file: UploadFile = Depends(verify_image)):
     contents = await file.read()
     img = Image.open(io.BytesIO(contents))
-    width, height = img.size
-    return {"width": width, "height": height}
+    return {"width": img.width, "height": img.height}
 
-
-# ========================================================================= Use
- 
-@app.get("/upload")
+@app.get("/upload", tags=["UI"])
 async def index_uploadFlieImg(request: Request):
     return templates.TemplateResponse("uploadFlieImg.html", {"request": request})
 
-@app.get("/webcam")
+@app.get("/webcam", tags=["UI"])
 async def index_openCamera(request: Request):
     return templates.TemplateResponse("openCamera.html", {"request": request})
 
+async def gen(camera):
+    try:
+        while True:
+            frame, img = await asyncio.to_thread(camera.get_frame)
+            try:
+                img = await asyncio.to_thread(faceDetection.webcam, img)
+                _, buffer = cv2.imencode('.jpg', img)
+                frame = buffer.tobytes()
+            except Exception as e:
+                print(f"Error processing frame: {e}")
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n\r\n')
+    finally:
+        camera.release()
 
-# ========================================================================= เปิดกล้องในเครื่อง
-
-
-from src.camera_multi import Camera
-import cv2
-
-def gen(camera):
-    while True:
-        frame , img = camera.get_frame()
-        try:
-            img = faceDetection.webcam(img)
-            frame = cv2.imencode('.jpg', img)[1].tobytes()
-        except:
-            pass
-        yield (b'--frame\r\n'
-            b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n\r\n')
-
-@app.get("/video_feed")
+@app.get("/video_feed", tags=["Streaming"])
 async def video_feed():
-    return StreamingResponse(gen(Camera()), media_type="multipart/x-mixed-replace; boundary=frame")
-
-
-# ========================================================================= 
+    camera = Camera()
+    return StreamingResponse(gen(camera), media_type="multipart/x-mixed-replace; boundary=frame")
 
 if __name__ == "__main__":
-#   uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=True)
-  uvicorn.run("app:app", host="127.0.0.1", port=8000)
-
+    print(f"Upload UI: {BASE_URL}/upload")
+    print(f"Webcam UI: {BASE_URL}/webcam")
+    print(f"Swagger UI: {SWAGGER}")
+    import uvicorn
+    uvicorn.run(app, host=HOST, port=PORT)

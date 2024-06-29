@@ -1,12 +1,12 @@
-import cv2
-import numpy as np
 import os
+import cv2
 import math
 import base64
-from src.config import MODEL
+import numpy as np
+from src.config import *
 
 class YOLOv8FaceDetector:
-    def __init__(self, model_path: str = None, conf_threshold: float = 0.8, input_size: int = 480):
+    def __init__(self, model_path: str = None, conf_threshold: float = REG_MAX, input_size: int = IMGSIZE):
         self.conf_threshold = conf_threshold  # ค่าความเชื่อมั่นขั้นต่ำในการยอมรับการตรวจจับใบหน้า
         self.input_size = input_size  # ขนาดของภาพที่ใช้เป็นอินพุตให้โมเดล
         self.net = cv2.dnn.readNet(model_path)  # โหลดโมเดล
@@ -15,10 +15,10 @@ class YOLOv8FaceDetector:
     def init_params(self):
         self.class_names = ['face']  # ชื่อคลาสที่โมเดลตรวจจับ
         self.num_classes = len(self.class_names)
-        self.iou_threshold = 0.58  # ค่า IoU ขั้นต่ำในการยอมรับการตรวจจับใบหน้า
-        self.reg_max = 16
+        self.iou_threshold = IOU  # ค่า IoU ขั้นต่ำในการยอมรับการตรวจจับใบหน้า
+        self.reg_max = REG_MAX
         self.project = np.arange(self.reg_max)
-        self.strides = (8, 16, 32)  # ค่าสเตรดที่ใช้ในการตรวจจับใบหน้า
+        self.strides = STRIDES  # ค่าสเตรดที่ใช้ในการตรวจจับใบหน้า
         self.feats_hw = [(math.ceil(self.input_size / stride), math.ceil(self.input_size / stride)) for stride in self.strides]
         self.anchors = self.make_anchors(self.feats_hw)  # สร้างจุดสำหรับกำหนดตำแหน่งใบหน้า
 
@@ -145,15 +145,16 @@ class YOLOv8FaceDetector:
         return image
 
 
-
 class YOLOFaceImageDetector:
-    def __init__(self, conf_threshold: float = 0.3, input_size: int = 480):
+    def __init__(self, conf_threshold=0.3, input_size=480):
         self.conf_threshold = conf_threshold
         self.input_size = input_size
-        self.save_json = True
-        self.labels_detect = False
-        self.detector = YOLOv8FaceDetector(MODEL, conf_threshold=self.conf_threshold, input_size=self.input_size)
-        self.space = 20 
+        self.detector = YOLOv8FaceDetector(
+            MODEL, 
+            conf_threshold=self.conf_threshold, 
+            input_size=self.input_size
+        )
+        self.space = FREE_SPACE
 
     def seting(self):
         self.detector.conf_threshold = self.conf_threshold
@@ -161,57 +162,60 @@ class YOLOFaceImageDetector:
         self.detector.init_params()
 
     def run(self, image_data, filename):
-        json_data = {}
         image = cv2.imdecode(np.frombuffer(image_data, np.uint8), cv2.IMREAD_COLOR)
         name, ext = os.path.splitext(filename)
-        ext = ext[1:].upper()
-
         boxes, confidences, _ = self.detector.detect(image)
 
         if len(boxes) == 0:
-            json_data["name_file"] = name
-            json_data["extension"] = ext
-            json_data["file_input"] = filename
-            json_data["type"] = "ImageFaceDetection"
-            json_data["error"] = "No faces detected"
-
-        else:
-            image_draw = self.detector.draw_detections(image,boxes)
-            _, buffer = cv2.imencode('.jpg', image_draw)
-            encoded_image = base64.b64encode(buffer).decode('utf-8')
-
-
-            data = []
-            for idx, (box, conf) in enumerate(zip(boxes, confidences)):
-                x, y, w, h = box.astype(int)
-                # face_capture = image[y - self.space:y + h + self.space, x - self.space:x + w + self.space]
-
-                data.append({
-                    "idx": idx,
-                    "bbox": {"x1": int(x), "y1": int(y), "x2": int(x + w), "y2": int(y + h)},
-                    "conf": float(conf),
-                    # "face_capture": face_capture.tolist(),
-                })
-
-            json_data["name_file"] = name
-            json_data["extension"] = ext
-            json_data["file_input"] = filename
-            json_data["type"] = "ImageFaceDetection"
-            json_data["count_img"] = len(confidences)
-            json_data["data"] = data
-            json_data["image"] = encoded_image
-
-        return json_data
+            return self._create_error_response(name, ext, filename)
+        
+        image_draw = self.detector.draw_detections(image, boxes)
+        encoded_image = self._encode_image(image_draw)
+        
+        return self._create_success_response(name, ext, filename, boxes, confidences, encoded_image)
 
     def webcam(self, image_data):
         boxes, _, _ = self.detector.detect(image_data)
-        image_draw = self.detector.draw_detections(image_data, boxes)
-        return image_draw
+        return self.detector.draw_detections(image_data, boxes)
     
     def webcam_upload(self, image_data):
         image = cv2.imdecode(np.frombuffer(image_data, np.uint8), cv2.IMREAD_COLOR)
         boxes, _, _ = self.detector.detect(image)
         image_draw = self.detector.draw_detections(image, boxes)
-        _, buffer = cv2.imencode('.jpg', image_draw)
-        encoded_image = base64.b64encode(buffer).decode('utf-8')
-        return {"image" : encoded_image}
+        return {"image": self._encode_image(image_draw)}
+
+    def _encode_image(self, image):
+        _, buffer = cv2.imencode('.jpg', image)
+        return base64.b64encode(buffer).decode('utf-8')
+
+    def _create_error_response(self, name, ext, filename):
+        return {
+            "input_filename": filename,
+            "base_filename": name,
+            "file_extension": ext.upper()[1:],
+            "detection_status": "error",
+            "error_message": "No faces detected"
+        }
+
+    def _create_success_response(self, name, ext, filename, boxes, confidences, encoded_image):
+        return {
+            "input_filename": filename,
+            "base_filename": name,
+            "file_extension": ext.upper()[1:],
+            "detection_status": "success",
+            "faces_detected_count": len(confidences),
+            "detected_faces": [
+                {
+                    "face_id": idx,
+                    "bounding_box": {
+                        "top_left_x": int(x),
+                        "top_left_y": int(y),
+                        "bottom_right_x": int(x + w),
+                        "bottom_right_y": int(y + h)
+                    },
+                    "confidence_score": float(conf)
+                }
+                for idx, ((x, y, w, h), conf) in enumerate(zip(boxes, confidences))
+            ],
+            "annotated_image_base64": encoded_image
+        }
